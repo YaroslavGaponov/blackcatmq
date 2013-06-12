@@ -1,0 +1,33 @@
+{
+  "name": "blackcatmq",
+  "version": "0.0.5",
+  "description": "simple STOMP messages broker (aka STOMP server) in node.js",
+  "main": "blackcatmq.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/YaroslavGaponov/blackcatmq.git"
+  },
+  "keywords": [
+    "STOMP",
+    "messages",
+    "broker",
+    "server",
+    "demon"
+  ],
+  "author": "Yaroslav Gaponov <yaroslav.gaponov@gmail.com>",
+  "license": "BSD",
+  "dependencies": {},
+  "devDependencies": {},
+  "optionalDependencies": {
+    "ldapauth": ">=2.1.1"
+  },
+  "engines": {
+    "node": ">=0.8.7"
+  }
+}

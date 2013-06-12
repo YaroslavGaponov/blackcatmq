@@ -1,0 +1,3 @@
+*.log
+/dump/*.dat
+/node_modules
