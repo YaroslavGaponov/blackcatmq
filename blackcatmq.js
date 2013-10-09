@@ -34,7 +34,10 @@ var BlackCatMQ = function (config) {
         self.port = config.port || 61613;
         self.host = config.host || '0.0.0.0';
         self.interval = config.interval || 50000;
-        
+        self.serverType = config.serverType || 'net';
+        self.authType = config.authType || 'none';
+        self.serverOptions = config.serverOptions || { 'allowHalfOpen': true };
+
         self.sockets = {};
         self.subscribes = {};
         
@@ -44,13 +47,13 @@ var BlackCatMQ = function (config) {
         self.transactions = {};
             
         self.auth = null;
-        switch (config.authType.toLowerCase()) {
+        switch (self.authType.toLowerCase()) {
             case 'ldap':
                 self.auth = new require('ldapauth')(config.authOprions);
                 break;                
         }
         
-        self.server = require(config.serverType).createServer(config.serverOptions, function(socket) {            
+        self.server = require(self.serverType).createServer(self.serverOptions, function(socket) {            
             socket.setEncoding('utf8');
             socket.setKeepAlive(true);
             
@@ -446,39 +449,46 @@ BlackCatMQ.prototype.timer = function() {
     }
 }
 
+if (require.main === module) {
+    /*
+     initalize & run server
+    */
+    fs.readFile(__dirname + '/blackcatmq.conf', 'utf8', function(err, data) {    
+        if (err) throw err;
+        
+        var config = JSON.parse(data);
 
-/*
- initalize & run server
-*/
-fs.readFile(__dirname + '/blackcatmq.conf', 'utf8', function(err, data) {    
-    if (err) throw err;
-    
-    var config = JSON.parse(data);
-
-    var server = new BlackCatMQ(config);
-    if (server) {
-        server.start();
-    }
-    
-    process.once('uncaughtException', function(err) {
-        util.debug('error:' + err + err.stack);
+        var server = new BlackCatMQ(config);
         if (server) {
-            server.stop();
+            server.start();
         }
+        
+        process.once('uncaughtException', function(err) {
+            util.debug('error:' + err + err.stack);
+            if (server) {
+                server.stop();
+            }
+        });
+        
+        process.once('exit', function() {
+            if (server) {
+                server.stop();
+            }        
+        });
+        
+        process.once('SIGINT', function() {
+            if (server) {
+                server.stop();
+            }
+            console.log('Got SIGINT.  Press Control-c to exit.');
+        });    
     });
-    
-    process.once('exit', function() {
-        if (server) {
-            server.stop();
-        }        
-    });
-    
-    process.once('SIGINT', function() {
-        if (server) {
-            server.stop();
-        }
-        console.log('Got SIGINT.  Press Control-c to exit.');
-    });    
-});
+}
 
+function create(config){
+    return new BlackCatMQ(config || {});
+}
 
+module.exports = {
+    create: create
+}
