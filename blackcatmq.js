@@ -3,6 +3,9 @@
 /*
  blackcatmq
  copyright (c) 2012,2013 Yaroslav Gaponov <yaroslav.gaponov@gmail.com>
+
+ changes:
+    9 October 2013 Chris Flook - Expose blackcatmq for use as a module
 */
 
 var DEBUG = false;
