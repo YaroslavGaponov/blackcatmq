@@ -10,7 +10,7 @@ var stomp_args = {
     host: 'localhost',
     debug: false,
     login: 'guest',
-    passcode: 'guest',
+    passcode: 'guest'
 };
 
 var client = new stomp.Stomp(stomp_args);
@@ -20,7 +20,7 @@ var client = new stomp.Stomp(stomp_args);
 // and dump it to the client.
 var headers = {
     destination: '/queue/test_stomp',
-    ack: 'client',
+    ack: 'client'
 //    'activemq.prefetchSize': '10'
 };
 

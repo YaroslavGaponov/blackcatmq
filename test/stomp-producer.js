@@ -15,7 +15,7 @@ var stomp_args = {
     host: 'localhost',
     debug: false,
     login: 'guest',
-    passcode: 'guest',
+    passcode: 'guest'
 }
 
 var client = new stomp.Stomp(stomp_args);
