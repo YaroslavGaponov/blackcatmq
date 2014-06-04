@@ -161,7 +161,7 @@ BlackCatMQ.prototype.connect = function(socket, frame) {
             return stomp.ServerFrame.ERROR('connect error','passcode is required');    
         }
         
-        self.auth.authenticate(login, passocde, function(err, user) {
+        self.auth.authenticate(login, passcode, function(err, user) {
             if (err) {
                 return stomp.ServerFrame.ERROR('connect error','incorrect login or passcode');    
             }
@@ -375,8 +375,8 @@ BlackCatMQ.prototype.begin = function(socket, frame) {
         return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
     }
     
-    var trasaction = frame.header['transaction'];
-    if (!trasaction) {
+    var transaction = frame.header['transaction'];
+    if (!transaction) {
         return stomp.ServerFrame.ERROR('invalid parameters','there is no transaction argument');
     }
     
@@ -401,8 +401,8 @@ BlackCatMQ.prototype.commit = function(socket, frame) {
         return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
     }
 
-    var trasaction = frame.header['transaction'];
-    if (!trasaction) {
+    var transaction = frame.header['transaction'];
+    if (!transaction) {
         return stomp.ServerFrame.ERROR('invalid parameters','there is no transaction argument');
     }
     
@@ -427,8 +427,8 @@ BlackCatMQ.prototype.abort = function(socket, frame) {
         return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
     }
     
-    var trasaction = frame.header['transaction'];
-    if (!trasaction) {
+    var transaction = frame.header['transaction'];
+    if (!transaction) {
         return stomp.ServerFrame.ERROR('invalid parameters','there is no transaction argument');
     }
     
