@@ -50,22 +50,22 @@ var BlackCatMQ = function (config) {
                 break;                
         }
 
-        self.protocolImpl = require('./'+self.protocol+'.js'));
+        self.protocolImpl = require('./protocols/'+self.protocol+'.js');
 
         self.server = self.protocolImpl.createServer(self, {
-            frameReceived: function(frameStr) {
+            frameReceived: function(socket, frameStr) {
                 var frame = stomp.Frame(frameStr),
                     command = frame.command.toLowerCase();
 
                 try {
                     if (typeof self.commands[command] === 'function') {
-                        self.protocolImpl.sendMessage(webSocket, self.commands[command].call(self, webSocket, frame));
+                        self.protocolImpl.sendMessage(socket, self.commands[command].call(self, socket, frame));
                     } else {
-                        self.protocolImpl.sendMessage(webSocket, stomp.ServerFrame.ERROR('invalid parameters','command ' + frame.command + ' is not supported'));
+                        self.protocolImpl.sendMessage(socket, stomp.ServerFrame.ERROR('invalid parameters','command ' + frame.command + ' is not supported'));
                     }
                 } catch (ex) {
                     util.log(ex.stack);
-                    self.protocolImpl.sendMessage(webSocket, stomp.ServerFrame.ERROR(ex, 'unrecoverable error'));
+                    self.protocolImpl.sendMessage(socket, stomp.ServerFrame.ERROR(ex, 'unrecoverable error'));
                 }
             },
 
@@ -80,8 +80,8 @@ var BlackCatMQ = function (config) {
                     }
                     fs.appendFileSync('./dump/' + self.dumpFileName, data, encoding='utf8');
                 }
-            });
-        }
+            }
+        });
     } else {
         return new BlackCatMQ(config);
     }

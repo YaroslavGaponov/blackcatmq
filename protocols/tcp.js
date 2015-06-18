@@ -1,5 +1,6 @@
 var net = require('net');
 var util = require('util');
+var stomp = require('../lib/stomp.js');
 
 function createServer(broker, callbacks) {
     return net.createServer(broker.serverOptions, function(socket) {            
@@ -19,7 +20,9 @@ function createServer(broker, callbacks) {
                             
             if (frames.length > 1) {
                 data = frames.pop();                
-                frames.forEach(callbacks.frameReceived);
+                frames.forEach(function(frame) {
+                    callbacks.frameReceived(socket, frame);
+                });
             }
         });
         

@@ -18,7 +18,7 @@ function createServer(broker, callbacks) {
         
         webSocket.on('message', function (message) {
             callbacks.debugDump(message.utf8Data);
-            callbacks.frameReceived(message.utf8Data);
+            callbacks.frameReceived(webSocket, message.utf8Data);
         });
         
         webSocket.on('close', function() {
