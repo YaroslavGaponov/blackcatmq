@@ -22,7 +22,9 @@
   ],
   "author": "Yaroslav Gaponov <yaroslav.gaponov@gmail.com>",
   "license": "BSD",
-  "dependencies": {},
+  "dependencies": {
+    "websocket": "^1.0.19"
+  },
   "devDependencies": {},
   "optionalDependencies": {
     "ldapauth": ">=2.1.1"

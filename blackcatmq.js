@@ -15,15 +15,6 @@ var fs = require('fs');
 
 var stomp = require('./lib/stomp.js');
 
-
-function sender(socket, data) {
-    if (data) {
-        if (socket && socket.writable) {
-            socket.write(data.toString());
-        }
-    }
-}
-
 function getId() {
     return 'id' + Math.floor(Math.random() * 999999999999999999999);
 }
@@ -37,12 +28,15 @@ var BlackCatMQ = function (config) {
         self.port = config.port || 61613;
         self.host = config.host || '0.0.0.0';
         self.interval = config.interval || 50000;
+        self.protocol = config.protocol || 'tcp';
         self.serverType = config.serverType || 'net';
         self.authType = config.authType || 'none';
         self.serverOptions = config.serverOptions || { 'allowHalfOpen': true };
+        self.stompVersion = config.stompVersion.slice(config.stompVersion.indexOf("1.")+2) || "0";
 
         self.sockets = {};
         self.subscribes = {};
+        self.subscribesById = {};
         
         self.messages = { frame: {}, queue: [] };
         self.ack_list = [];
@@ -52,58 +46,42 @@ var BlackCatMQ = function (config) {
         self.auth = null;
         switch (self.authType.toLowerCase()) {
             case 'ldap':
-                self.auth = new require('ldapauth')(config.authOprions);
+                self.auth = new require('ldapauth')(config.authOptions);
                 break;                
         }
-        
-        self.server = require(self.serverType).createServer(self.serverOptions, function(socket) {            
-            socket.setEncoding('utf8');
-            socket.setKeepAlive(true);
-            
-            var remoteAddress = socket.address();
-            util.log(util.format('server is connected to %s:%s', remoteAddress.address, remoteAddress.port));
-            
-            var data = '';
-            socket.on('data', function(chunk) {
-                
+
+        self.protocolImpl = require('./'+self.protocol+'.js'));
+
+        self.server = self.protocolImpl.createServer(self, {
+            frameReceived: function(frameStr) {
+                var frame = stomp.Frame(frameStr),
+                    command = frame.command.toLowerCase();
+
+                try {
+                    if (typeof self.commands[command] === 'function') {
+                        self.protocolImpl.sendMessage(webSocket, self.commands[command].call(self, webSocket, frame));
+                    } else {
+                        self.protocolImpl.sendMessage(webSocket, stomp.ServerFrame.ERROR('invalid parameters','command ' + frame.command + ' is not supported'));
+                    }
+                } catch (ex) {
+                    util.log(ex.stack);
+                    self.protocolImpl.sendMessage(webSocket, stomp.ServerFrame.ERROR(ex, 'unrecoverable error'));
+                }
+            },
+
+            disconnected: function(socket) {
+                self.commands.disconnect.call(self, socket, null);
+            },
+
+            debugDump: function(data) {
                 if (DEBUG) {
                     if (!self.dumpFileName) {
                         self.dumpFileName = new Date().toString() + '.dat';
                     }
-                    fs.appendFileSync('./dump/' + self.dumpFileName, chunk, encoding='utf8');
+                    fs.appendFileSync('./dump/' + self.dumpFileName, data, encoding='utf8');
                 }
-                
-                data += chunk.toString();
-                
-                var frames = data.split(stomp.DELIMETER);
-                                
-                if (frames.length > 1) {
-                    data = frames.pop();                
-                    frames.forEach(function(_frame) {
-                        var frame = stomp.Frame(_frame);
-                        try {                            
-                            if (DEBUG) {
-                                util.log(util.inspect(frame));
-                            }
-                            
-                            if (self[frame.command.toLowerCase()] && typeof self[frame.command.toLowerCase()] === 'function') {
-                                sender(socket, self[frame.command.toLowerCase()].call(self, socket, frame));
-                            } else {
-                                sender(socket, stomp.ServerFrame.ERROR('invalid parameters','command ' + frame.command + ' is not supported'));
-                            }
-                        } catch (ex) {
-                            sender(socket, stomp.ServerFrame.ERROR(ex, ex.stack));
-                        }
-                    });
-                }   
-                
             });
-            
-            socket.on('end', function() {
-                util.log(util.format('server is disconnected from %s:%s', remoteAddress.address, remoteAddress.port));
-                self.disconnect(socket, null);
-            });
-        });        
+        }
     } else {
         return new BlackCatMQ(config);
     }
@@ -144,304 +122,341 @@ BlackCatMQ.prototype.stop = function(callback) {
     });    
 }
 
-/*
- STOMP command  -> connect
-*/
-BlackCatMQ.prototype.connect = function(socket, frame) {
-    var self = this;
-    
-    if (self.auth) {
-        
-        var login = frame.header['login']
-        if (!login) {
-            return stomp.ServerFrame.ERROR('connect error','login is required');    
+BlackCatMQ.prototype.deleteOwnSubscriptionsFromDestination = function(sessionId, subscriptions) {
+    var pos = -1,
+        subscription;
+
+    for(var i=0; i<subscriptions.length; i++) {
+        subscription = subscriptions[pos];
+        if(subscription.sessionId == socket.sessionID) {
+            pos = i;
+            break;
         }
-        var passcode = frame.header['passcode']
-        if (!passcode) {
-            return stomp.ServerFrame.ERROR('connect error','passcode is required');    
+    }
+
+    if (pos >= 0) {
+        subscriptions.splice(pos, 1);
+        if(subscription.id) {
+            delete self.subscribesById["_"+subscription.id];
         }
-        
-        self.auth.authenticate(login, passcode, function(err, user) {
-            if (err) {
-                return stomp.ServerFrame.ERROR('connect error','incorrect login or passcode');    
-            }
-            
-            var sessionID = getId();
-            socket.sessionID = sessionID;
-            self.sockets[sessionID] = socket;
-            
-            return stomp.ServerFrame.CONNECTED(sessionID, self.identifier);            
-        });        
+
+        return subscription;
     }
-        
-    var sessionID = getId();
-    socket.sessionID = sessionID;
-    self.sockets[sessionID] = socket;
-    
-    return stomp.ServerFrame.CONNECTED(sessionID, self.identifier);
 }
 
-/*
- STOMP command -> subscribe
-*/
-BlackCatMQ.prototype.subscribe = function(socket, frame) {
+BlackCatMQ.prototype.send = function(frame) {
     var self = this;
     
-    if (!socket.sessionID) {
-        return stomp.ServerFrame.ERROR('connect error','you need connect before');
-    }
-    
-    if (self.sockets[socket.sessionID] !== socket) {
-        return stomp.ServerFrame.ERROR('connect error','session is not correct');
-    }
-    
     if (!frame.header) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
+        throw new Error('to send a frame the frame must have a header');
     }
     
     var destination = frame.header['destination'];
     if (!destination) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no destination argument');
-    }
-        
-    if (frame.header['ack'] && frame.header['ack'] === 'client') {
-        self.ack_list.push(socket.sessionID);
-    }
-    
-    if (self.subscribes[destination]) {
-        self.subscribes[destination].push(socket.sessionID);    
-    } else {
-        self.subscribes[destination] = [socket.sessionID];   
-    }
-}
-
-/*
- STOMP command -> unsubsctibe
-*/
-BlackCatMQ.prototype.unsubscribe = function(socket, frame) {
-    var self = this;
-    
-    if (!socket.sessionID) {
-        return stomp.ServerFrame.ERROR('connect error','you need connect before');
+        throw new Error('destination is a required argument to');
     }
 
-    if (self.sockets[socket.sessionID] !== socket) {
-        return stomp.ServerFrame.ERROR('connect error','session is not correct');
-    }
-       
-    if (!frame.header) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
-    }
+    var subscriptions = self.subscribes[destination];
     
-    var destination = frame.header['destination'];
-    if (!destination) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no destination argument');
-    }
-    
-    if (self.subscribes[destination]) {
-        var pos = self.subscribes[destination].indexOf(socket.sessionID);
-        if (pos >= 0) {
-            self.subscribes[destination].splice(pos, 1);   
-        }        
-    }
-}
-
-/*
- STOMP command -> send
-*/
-BlackCatMQ.prototype.send = function(socket, frame) {
-    var self = this;
-
-    if (!socket.sessionID) {
-        return stomp.ServerFrame.ERROR('connect error','you need connect before');
-    }
-
-    if (self.sockets[socket.sessionID] !== socket) {
-        return stomp.ServerFrame.ERROR('connect error','session is not correct');
-    }
-   
-    if (!frame.header) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
-    }
-    
-    var destination = frame.header['destination'];
-    if (!destination) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no destination argument');
-    }
-    
-    var transaction = frame.header['transaction'];
-    if (transaction) {
-        self.transactions[transaction].push(frame);
-    }
-    
-    if (self.subscribes[destination]) {
-                
+    if (subscriptions) {
         var messageID = getId();
                 
         if (destination.indexOf('/queue/') === 0) {
-            var session =  self.subscribes[destination].pop();
-            self.subscribes[destination].unshift(session);
+            var subscription = subscriptions.pop(),
+                session = subscription.sessionID;
+
+            subscriptions.unshift(subscription);
                         
             if (self.ack_list.indexOf(session) >= 0) {
                 self.messages.frame[messageID] = frame;
                 self.messages.queue.push(messageID);
             }            
-            sender(self.sockets[session], stomp.ServerFrame.MESSAGE(destination, messageID, frame.body));            
+            self.protocolImpl.sendMessage(self.sockets[session], stomp.ServerFrame.MESSAGE(destination, messageID, frame.body, subscription.id));            
         } else {
-            self.subscribes[destination].forEach(function(session) {
-                sender(self.sockets[session], stomp.ServerFrame.MESSAGE(destination, messageID, frame.body));                
+            subscriptions.forEach(function(subscription) {
+                self.protocolImpl.sendMessage(self.sockets[subscription.sessionId], stomp.ServerFrame.MESSAGE(destination, messageID, frame.body, subscription.id));                
             });    
         }
     }
 }
 
-/*
- STOMP command -> ack
-*/
-BlackCatMQ.prototype.ack = function(socket, frame) {
-    var self = this;
-
-    if (!socket.sessionID) {
-        return stomp.ServerFrame.ERROR('connect error','you need connect before');
-    }
-
-    if (self.sockets[socket.sessionID] !== socket) {
-        return stomp.ServerFrame.ERROR('connect error','session is not correct');
-    }
-    
-    if (!frame.header) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
-    }
-    
-    var messageID = frame.header['message-id'];
-    if (!messageID) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no message-id argument');
-    }
+BlackCatMQ.prototype.commands = {
+    connect: function(socket, frame) {
+        var self = this;
         
-    delete self.messages.frame[messageID];
-    var pos = self.messages.queue.indexOf(messageID);    
-    if (pos >= 0) {
-        self.messages.queue.splice(pos, 1);
-    }
-    
-    return stomp.ServerFrame.RECEIPT(messageID);
-}
-
-
-/*
- STOMP command -> disconnect
-*/
-BlackCatMQ.prototype.disconnect = function(socket, frame) {
-    var self = this;
-
-    if (!socket.sessionID) {
-        return stomp.ServerFrame.ERROR('connect error','you need connect before');
-    }
-
-    if (self.sockets[socket.sessionID] !== socket) {
-        return stomp.ServerFrame.ERROR('connect error','session is not correct');
-    }
-    
-    delete self.sockets[socket.sessionID];
-    
-    for (var destination in self.subscribes) {
-        var pos = self.subscribes[destination].indexOf(socket.sessionID);
-        if (pos >= 0) {
-            self.subscribes[destination].splice(pos, 1);   
+        if (self.auth) {
+            
+            var login = frame.header['login']
+            if (!login) {
+                return stomp.ServerFrame.ERROR('connect error','login is required');    
+            }
+            var passcode = frame.header['passcode']
+            if (!passcode) {
+                return stomp.ServerFrame.ERROR('connect error','passcode is required');    
+            }
+            
+            self.auth.authenticate(login, passocde, function(err, user) {
+                if (err) {
+                    return stomp.ServerFrame.ERROR('connect error','incorrect login or passcode');    
+                }
+                
+                var sessionID = getId();
+                socket.sessionID = sessionID;
+                self.sockets[sessionID] = socket;
+                
+                return stomp.ServerFrame.CONNECTED(sessionID, self.identifier);            
+            });        
         }
-    }
-    
-    var pos = self.ack_list.indexOf(socket.sessionID);
-    if (pos >= 0) {
-        self.ack_list.splice(pos, 1);
-    }
-}
-
-/*
- STOMP command -> begin
-*/
-BlackCatMQ.prototype.begin = function(socket, frame) {
-    var self = this;
-
-    if (!socket.sessionID) {
-        return stomp.ServerFrame.ERROR('connect error','you need connect before');
-    }
-
-    if (self.sockets[socket.sessionID] !== socket) {
-        return stomp.ServerFrame.ERROR('connect error','session is not correct');
-    }    
-    
-    if (!frame.header) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
-    }
-    
-    var transaction = frame.header['transaction'];
-    if (!transaction) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no transaction argument');
-    }
-    
-    self.transactions[transaction] = [];
-}
-
-/*
- STOMP command -> commit
-*/
-BlackCatMQ.prototype.commit = function(socket, frame) {
-    var self = this;
-
-    if (!socket.sessionID) {
-        return stomp.ServerFrame.ERROR('connect error','you need connect before');
-    }
-
-    if (self.sockets[socket.sessionID] !== socket) {
-        return stomp.ServerFrame.ERROR('connect error','session is not correct');
-    }
-      
-    if (!frame.header) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
-    }
-
-    var transaction = frame.header['transaction'];
-    if (!transaction) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no transaction argument');
-    }
-    
-    delete self.transactions[transaction];
-}
-
-/*
- STOMP command -> abort
-*/
-BlackCatMQ.prototype.abort = function(socket, frame) {
-    var self = this;
-
-    if (!socket.sessionID) {
-        return stomp.ServerFrame.ERROR('connect error','you need connect before');
-    }
-
-    if (self.sockets[socket.sessionID] !== socket) {
-        return stomp.ServerFrame.ERROR('connect error','session is not correct');
-    }
+            
+        var sessionID = getId();
+        socket.sessionID = sessionID;
+        self.sockets[sessionID] = socket;
         
-    if (!frame.header) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
+        return stomp.ServerFrame.CONNECTED(sessionID, self.identifier);
+    },
+
+    subscribe: function(socket, frame) {
+        var self = this;
+        
+        if (!socket.sessionID) {
+            return stomp.ServerFrame.ERROR('connect error','you need connect before');
+        }
+        
+        if (self.sockets[socket.sessionID] !== socket) {
+            return stomp.ServerFrame.ERROR('connect error','session is not correct');
+        }
+        
+        if (!frame.header) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
+        }
+        
+        var destination = frame.header['destination'];
+        if (!destination) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no destination argument');
+        }
+
+        var id = frame.header['id'];
+        if(!id && self.config.stompVersion !== "0") {
+            return stomp.ServerFrame.ERROR('invalid parameters', 'there is no id argument');
+        }
+            
+        if (frame.header['ack'] && frame.header['ack'] === 'client') {
+            self.ack_list.push(socket.sessionID);
+        }
+        
+        if (!self.subscribes[destination]) {
+            self.subscribes[destination] = [];
+        }
+
+        var subscription = {
+            id: id,
+            sessionId: socket.sessionID,
+            destination: destination
+        };
+        
+        self.subscribes[destination].push(subscription);
+        if(id) {
+            self.subscribesById["_"+id] = subscription; //avoid 1000 length array for id "1000"
+        }
+    },
+
+    unsubscribe: function(socket, frame) {
+        var self = this;
+        
+        if (!socket.sessionID) {
+            return stomp.ServerFrame.ERROR('connect error','you need connect before');
+        }
+
+        if (self.sockets[socket.sessionID] !== socket) {
+            return stomp.ServerFrame.ERROR('connect error','session is not correct');
+        }
+           
+        if (!frame.header) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
+        }
+        
+        var destination = frame.header['destination'];
+        var id = frame.header['id'];
+        if(self.config.stompVersion !== "0") {
+            if (!id) {
+                return stomp.ServerFrame.ERROR('invalid parameters','you must specify an id to unsubscribe from');
+            }
+        } else {
+            if (!destination) {
+                return stomp.ServerFrame.ERROR('invalid parameters','you must specify a destination to unsubscribe from')
+            }
+        }
+
+        var subscription;
+
+        if(self.config.stompVersion !== "0") {
+            subscription = self.subscribesById["_"+id];
+
+            if(subscription) {
+                delete self.subscribesById["_"+id];
+                delete subscribes[subscription.destination];
+            }
+        } else {
+            if (self.subscribes[destination]) {
+                self.deleteOwnSubscriptionsFromDestination(socket.sessionID, self.subscribes[destination]);
+            }      
+        }
+    },
+
+    send: function(socket, frame) {
+        var self = this;
+
+        if (!socket.sessionID) {
+            return stomp.ServerFrame.ERROR('connect error','you need connect before');
+        }
+
+        if (self.sockets[socket.sessionID] !== socket) {
+            return stomp.ServerFrame.ERROR('connect error','session is not correct');
+        }
+       
+        if (!frame.header) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
+        }
+        
+        var destination = frame.header['destination'];
+        if (!destination) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no destination argument');
+        }
+        
+        var transaction = frame.header['transaction'];
+        if (transaction) {
+            self.transactions[transaction].push(frame);
+        }
+
+        self.send(frame);
+    },
+
+    ack: function(socket, frame) {
+        var self = this;
+
+        if (!socket.sessionID) {
+            return stomp.ServerFrame.ERROR('connect error','you need connect before');
+        }
+
+        if (self.sockets[socket.sessionID] !== socket) {
+            return stomp.ServerFrame.ERROR('connect error','session is not correct');
+        }
+        
+        if (!frame.header) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
+        }
+        
+        var messageID = frame.header['message-id'];
+        if (!messageID) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no message-id argument');
+        }
+            
+        delete self.messages.frame[messageID];
+        var pos = self.messages.queue.indexOf(messageID);    
+        if (pos >= 0) {
+            self.messages.queue.splice(pos, 1);
+        }
+        
+        return stomp.ServerFrame.RECEIPT(messageID);
+    },
+
+    disconnect: function(socket, frame) {
+        var self = this;
+
+        if (!socket.sessionID) {
+            return stomp.ServerFrame.ERROR('connect error','disconnect was called on a socket that was never connected or has already been disconnected');
+        }
+
+        if (self.sockets[socket.sessionID] !== socket) {
+            return stomp.ServerFrame.ERROR('connect error','session is not correct');
+        }
+        
+        delete self.sockets[socket.sessionID];
+        
+        for (var destination in self.subscribes) {
+            self.deleteOwnSubscriptionsFromDestination(socket.sessionID, self.subscribes[destination]);
+        }
+        
+        var pos = self.ack_list.indexOf(socket.sessionID);
+        if (pos >= 0) {
+            self.ack_list.splice(pos, 1);
+        }
+    },
+
+    begin: function(socket, frame) {
+        var self = this;
+
+        if (!socket.sessionID) {
+            return stomp.ServerFrame.ERROR('connect error','you need connect before');
+        }
+
+        if (self.sockets[socket.sessionID] !== socket) {
+            return stomp.ServerFrame.ERROR('connect error','session is not correct');
+        }    
+        
+        if (!frame.header) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
+        }
+        
+        var trasaction = frame.header['transaction'];
+        if (!trasaction) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no transaction argument');
+        }
+        
+        self.transactions[transaction] = [];
+    },
+
+    commit: function(socket, frame) {
+        var self = this;
+
+        if (!socket.sessionID) {
+            return stomp.ServerFrame.ERROR('connect error','you need connect before');
+        }
+
+        if (self.sockets[socket.sessionID] !== socket) {
+            return stomp.ServerFrame.ERROR('connect error','session is not correct');
+        }
+          
+        if (!frame.header) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
+        }
+
+        var trasaction = frame.header['transaction'];
+        if (!trasaction) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no transaction argument');
+        }
+        
+        delete self.transactions[transaction];
+    },
+
+    abort: function(socket, frame) {
+        var self = this;
+
+        if (!socket.sessionID) {
+            return stomp.ServerFrame.ERROR('connect error','you need connect before');
+        }
+
+        if (self.sockets[socket.sessionID] !== socket) {
+            return stomp.ServerFrame.ERROR('connect error','session is not correct');
+        }
+            
+        if (!frame.header) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no header section');
+        }
+        
+        var trasaction = frame.header['transaction'];
+        if (!trasaction) {
+            return stomp.ServerFrame.ERROR('invalid parameters','there is no transaction argument');
+        }
+        
+        self.transactions[transaction].forEach(function(frame) {
+            self.send(null, frame);
+        });    
+        delete self.transactions[transaction];
     }
-    
-    var transaction = frame.header['transaction'];
-    if (!transaction) {
-        return stomp.ServerFrame.ERROR('invalid parameters','there is no transaction argument');
-    }
-    
-    self.transactions[transaction].forEach(function(frame) {
-        self.send(null, frame);
-    });    
-    delete self.transactions[transaction];
 }
+    
 
-
-/*
- periodic task - return of lost messages 
-*/
 BlackCatMQ.prototype.timer = function() {
     var self = this;
     
@@ -488,10 +503,8 @@ if (require.main === module) {
     });
 }
 
-function create(config){
+BlackCatMQ.create = function(config){
     return new BlackCatMQ(config || {});
 }
 
-module.exports = {
-    create: create
-}
+module.exports = BlackCatMQ;
