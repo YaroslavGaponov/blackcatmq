@@ -162,9 +162,14 @@ BlackCatMQ.prototype.send = function(frame) {
     if (subscriptions) {
         var messageID = getId();
 
+        frame.header['destination'] = destination;
+        frame.header['message-id'] = messageID;
+
         if (destination.indexOf('/queue/') === 0) {
             var subscription = subscriptions.pop(),
                 session = subscription.sessionId;
+
+            frame.header['subscription'] = subscription.id;
 
             subscriptions.unshift(subscription);
 
@@ -172,10 +177,12 @@ BlackCatMQ.prototype.send = function(frame) {
                 self.messages.frame[messageID] = frame;
                 self.messages.queue.push(messageID);
             }
-            self.protocolImpl.sendMessage(self.sockets[session], stomp.ServerFrame.MESSAGE(destination, messageID, frame.body, subscription.id));
+            self.protocolImpl.sendMessage(self.sockets[session], stomp.ServerFrame.MESSAGE(frame));
         } else {
             subscriptions.forEach(function(subscription) {
-                self.protocolImpl.sendMessage(self.sockets[subscription.sessionId], stomp.ServerFrame.MESSAGE(destination, messageID, frame.body, subscription.id));
+                frame.header['subscription'] = subscription.id;
+
+                self.protocolImpl.sendMessage(self.sockets[subscription.sessionId], stomp.ServerFrame.MESSAGE(frame));
             });
         }
     }
