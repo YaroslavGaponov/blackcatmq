@@ -22,8 +22,10 @@ BlackCatMq - simple STOMP messages broket (aka STOMP server) in node.js
 ## Features
 
   Support authentication through LDAP server
-  
+
   Support TLS/SSL
+  
+  Support Custom Headers
 
 
 ## Contributors
