@@ -128,8 +128,8 @@ BlackCatMQ.prototype.deleteOwnSubscriptionsFromDestination = function(sessionId,
         subscription;
 
     for(var i=0; i<subscriptions.length; i++) {
-        subscription = subscriptions[pos];
-        if(subscription.sessionId == socket.sessionID) {
+        subscription = subscriptions[i];
+        if(subscription.sessionId == sessionId) {
             pos = i;
             break;
         }
@@ -164,7 +164,7 @@ BlackCatMQ.prototype.send = function(frame) {
 
         if (destination.indexOf('/queue/') === 0) {
             var subscription = subscriptions.pop(),
-                session = subscription.sessionID;
+                session = subscription.sessionId;
 
             subscriptions.unshift(subscription);
 
@@ -237,7 +237,7 @@ BlackCatMQ.prototype.commands = {
         }
 
         var id = frame.header['id'];
-        if(!id && self.config.stompVersion !== "0") {
+        if(!id && self.stompVersion !== "0") {
             return stomp.ServerFrame.ERROR('invalid parameters', 'there is no id argument');
         }
 

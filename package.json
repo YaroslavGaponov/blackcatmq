@@ -1,6 +1,6 @@
 {
   "name": "blackcatmq",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "simple STOMP messages broker (aka STOMP server) in node.js",
   "main": "blackcatmq.js",
   "directories": {
@@ -25,7 +25,9 @@
   "dependencies": {
     "websocket": "^1.0.19"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "stomp": "^0.1.1"
+  },
   "optionalDependencies": {
     "ldapauth": ">=2.1.1"
   },
