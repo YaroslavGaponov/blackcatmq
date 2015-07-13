@@ -35,7 +35,8 @@ client.on('connected', function() {
         client.send({
             'destination': queue,
             'body': 'Testing\n\ntesting1\n\ntesting2 ' + i,
-            'persistent': 'true'
+            'persistent': 'true',
+            'custom': true
         }, receipt);
         sleep(250);
     }
