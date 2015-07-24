@@ -125,7 +125,8 @@ BlackCatMQ.prototype.stop = function(callback) {
 
 BlackCatMQ.prototype.deleteOwnSubscriptionsFromDestination = function(sessionId, subscriptions) {
     var pos = -1,
-        subscription;
+        subscription,
+        self = this;
 
     for(var i=0; i<subscriptions.length; i++) {
         subscription = subscriptions[i];
